@@ -1,0 +1,67 @@
+VEG Café — Firebase setup (customer + admin apps)
+==================================================
+
+1) Create a Firebase project
+   - Open https://console.firebase.google.com
+   - “Add project” → follow the wizard (Google Analytics optional).
+
+2) Turn on Firestore
+   - Build → Firestore Database → Create database
+   - Start in “production mode” or “test mode” (you will replace rules with firestore.rules in this repo).
+
+3) Get the web app config (used in .env.local)
+   - Project overview → gear icon → Project settings
+   - “Your apps” → Web (</>) → register app (nickname e.g. veg-web)
+   - Copy the `firebaseConfig` object values into `.env.local` (see below).
+
+4) Create `.env.local` in the PROJECT ROOT (same folder as package.json)
+   - Copy `.env.example` → `.env.local`
+   - Uncomment and fill:
+       VITE_FIREBASE_API_KEY=...
+       VITE_FIREBASE_AUTH_DOMAIN=...
+       VITE_FIREBASE_PROJECT_ID=...
+       VITE_FIREBASE_STORAGE_BUCKET=...
+       VITE_FIREBASE_MESSAGING_SENDER_ID=...
+       VITE_FIREBASE_APP_ID=...
+       VITE_FIREBASE_MEASUREMENT_ID=...   (optional — from firebaseConfig if you use Analytics)
+
+5) Create `admin/.env.local`
+   - Paste the SAME six VITE_FIREBASE_* lines as in the root `.env.local`.
+   - Set VITE_ADMIN_PIN=yourPIN (simple frontend login; use quotes if the PIN has special characters).
+   - Rebuild admin after changing PIN: npm run build:firebase (PIN is baked in at build time).
+
+6) Publish Firestore + Storage rules
+   - Firestore → Rules → paste `firestore.rules` → Publish
+   - Storage → Get started (enable) → Rules → paste `storage.rules` → Publish
+   - OR CLI: `firebase deploy --only firestore:rules,storage`
+
+7) Menu collection (`menus`)
+   - Firestore → Data → collection id: menus
+   - Fields per dish: name, price (₹), available, optional category, description, priceLarge, optional imageUrl (or upload → Storage URL)
+   - Admin → “Food list” tab: add/edit all of the above (publish firestore.rules so writes are allowed).
+
+8) Use real menu + real orders in the customer app
+   - `.env.development` should have: VITE_USE_DUMMY_MENU=false (default in this repo)
+   - Restart: npm run dev
+
+9) Run admin (local dev on port 5174)
+   - From project root: npm run admin:dev
+   - Open http://localhost:5174
+
+10) Firebase Hosting (customer + admin on one site)
+   - Build pipeline: `npm run build:firebase` = admin build → `public/admin` → customer `vite build`.
+   - Vite copies everything under `public/` into `dist/` during the customer build (so `public/admin` → `dist/admin`).
+   - `postbuild` also runs `scripts/ensure-admin-in-dist.mjs` to copy `public/admin` → `dist/admin` again (safety net before deploy).
+   - Deploy: `firebase deploy` (or `firebase deploy --only hosting`)
+   - Live URLs: / = customer app, /admin/ = kitchen board
+   - If /admin shows the customer app: confirm `dist/admin/index.html` exists after build, redeploy
+     `firebase.json` rewrites ( /admin, /admin/, /admin/** before ** ), run `npm run build:firebase` then `firebase deploy`
+   - Local admin dev: http://localhost:5174/admin/ (base is `/admin/`)
+
+11) If Firestore shows an “index” link in an error, click it once to create the index, then retry.
+
+12) “Missing or insufficient permissions” when changing a dish (e.g. Show/Hide or Save)
+    - Firestore is rejecting the write: the rules in the Console do not match this repo, or they were never published.
+    - Fix: Firebase Console → Firestore → Rules → replace with the contents of `firestore.rules` in this folder → Publish.
+    - Confirm `admin/.env.local` uses the SAME project as that console (VITE_FIREBASE_PROJECT_ID).
+    - From this folder (with Firebase CLI): `firebase deploy --only firestore:rules`

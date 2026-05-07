@@ -1,0 +1,34 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /menus/{doc} {
+      allow read, write: if true;
+    }
+
+    match /orders/{doc} {
+      allow read: if true;
+      allow create, update: if true;
+      allow delete: if true;
+    }
+
+    match /tableLocks/{doc} {
+      allow read: if true;
+      allow create, update: if true;
+      allow delete: if true;
+    }
+
+    match /tables/{doc} {
+      allow read, write: if true;
+    }
+
+    match /settlements/{doc} {
+      allow read, write: if true;
+    }
+
+    match /serviceRequests/{doc} {
+      allow read, write: if true;
+    }
+  }
+}

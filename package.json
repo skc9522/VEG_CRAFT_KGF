@@ -1,0 +1,26 @@
+{
+  "name": "veg-cafe-kgf",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "postbuild": "node scripts/ensure-admin-in-dist.mjs",
+    "preview": "vite preview",
+    "admin:dev": "npm run dev --prefix admin",
+    "admin:build": "npm run build --prefix admin",
+    "admin:preview": "npm run preview --prefix admin",
+    "sync:admin": "node scripts/sync-admin-public.mjs",
+    "build:firebase": "npm run build --prefix admin && node scripts/sync-admin-public.mjs && npm run build"
+  },
+  "dependencies": {
+    "firebase": "^11.10.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^6.0.0"
+  }
+}
