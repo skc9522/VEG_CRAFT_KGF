@@ -1,0 +1,71 @@
+VEG CRAFT - Re-Deployment Steps
+================================
+
+Current live URLs
+-----------------
+Customer App: https://veg-cafe.web.app
+Admin App:    https://veg-cafe.web.app/admin
+Firebase Console: https://console.firebase.google.com/project/veg-cafe/overview
+GitHub Repo: https://github.com/skc9522/VEG_CRAFT_KGF.git
+
+Prerequisites
+-------------
+1) Node.js + npm installed
+2) Firebase CLI access through npx
+3) Logged in to Firebase account with access to project "veg-cafe"
+4) Cloud Storage enabled in Firebase project
+
+Project folder
+--------------
+Run commands from:
+C:\Users\sunilkumar\Desktop\Veg_cafe_KGF
+
+Step-by-step re-deploy
+----------------------
+1) Check Firebase CLI version
+   npx -y firebase-tools@latest --version
+
+2) Login check
+   npx -y firebase-tools@latest login:list
+
+3) Set active project
+   npx -y firebase-tools@latest use veg-cafe
+
+4) Build latest code
+   npm run build
+
+5) Deploy hosting + Firestore rules + Storage rules
+   npx -y firebase-tools@latest deploy --only hosting,firestore:rules,storage
+
+If Cloud Storage deploy fails
+-----------------------------
+If you see storage setup error:
+"Firebase Storage has not been set up on project 'veg-cafe'"
+
+Then:
+1) Open: https://console.firebase.google.com/project/veg-cafe/storage
+2) Click "Get Started" once
+3) Re-run:
+   npx -y firebase-tools@latest deploy --only storage
+
+Partial deploy options
+----------------------
+Only hosting:
+   npx -y firebase-tools@latest deploy --only hosting
+
+Only Firestore rules:
+   npx -y firebase-tools@latest deploy --only firestore:rules
+
+Only Storage rules:
+   npx -y firebase-tools@latest deploy --only storage
+
+Post-deploy checks
+------------------
+1) Open customer app URL and verify menu/order flow
+2) Open admin URL and verify:
+   - Orders updates
+   - Bills pending/received
+   - Menu image upload
+   - QR print/download
+3) Confirm no permission errors in browser console
+
