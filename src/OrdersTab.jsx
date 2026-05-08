@@ -28,6 +28,7 @@ export default function OrdersTab({ orders, liveOpenTabTotal }) {
   }, [detailOrderId, list]);
 
   const detailOrder = detailOrderId ? list.find((o) => o.orderId === detailOrderId) : null;
+  const placeLabel = (o) => (String(o?.orderType || '').toLowerCase() === 'parcel' ? 'Parcel' : `Table ${o?.table ?? '—'}`);
 
   return (
     <section className="orders-tab" aria-label="Your orders">
@@ -49,7 +50,7 @@ export default function OrdersTab({ orders, liveOpenTabTotal }) {
               Order ID: <code>{detailOrder.orderId}</code>
             </p>
             <p className="order-sheet__meta muted">
-              Table {detailOrder.table}
+              {placeLabel(detailOrder)}
               {detailOrder.placedAt ? <> · {formatPlacedAt(detailOrder.placedAt)}</> : null}
             </p>
             <ul className="order-sheet__lines">
@@ -108,7 +109,7 @@ export default function OrdersTab({ orders, liveOpenTabTotal }) {
                         ) : null}
                       </span>
                       <span className="order-history-row__meta">
-                        {formatPlacedAt(o.placedAt) || '—'} · Table {o.table}
+                        {formatPlacedAt(o.placedAt) || '—'} · {placeLabel(o)}
                         {o.status ? <> · {String(o.status).toUpperCase()}</> : null}
                       </span>
                       <span className="order-history-row__id">{o.orderId}</span>

@@ -8,6 +8,7 @@ import {
   openTabTotalForTable,
   isUnbilledOrder,
   orderCountsOnOpenTab,
+  isParcelOrder,
 } from './orderUtils.js';
 import { menuItemFromFirestore } from './menuNormalize.js';
 import ManualOrderModal from './ManualOrderModal.jsx';
@@ -133,17 +134,29 @@ function OrderCard({ o, updatingId, onPatchStatus, onReject, onEdit }) {
   const name = displayCustomerName(o);
   const st = String(o.status || 'pending').toLowerCase();
   const billed = !isUnbilledOrder(o);
+  const parcel = isParcelOrder(o);
   const src = o.source === 'admin' ? 'Staff' : 'Guest';
   return (
-    <li className="order-card order-card--modern">
+    <li className={`order-card order-card--modern ${parcel ? 'order-card--parcel' : ''}`}>
       <div className="order-card__top">
-        <span className={statusClass(o.status)}>{statusLabel(o.status)}</span>
+        <div className="order-card__badges">
+          <span className={statusClass(o.status)}>{statusLabel(o.status)}</span>
+          {parcel ? <span className="badge badge--parcel">Parcel</span> : null}
+        </div>
         <span className="order-card__time">{formatTime(o.createdAt)}</span>
       </div>
       <div className="order-card__who">
         <span className="order-card__customer-name">{name}</span>
         <span className="order-card__table-line">
-          Table <strong>{o.table ?? '—'}</strong>
+          {parcel ? (
+            <>
+              <strong>Parcel</strong>
+            </>
+          ) : (
+            <>
+              Table <strong>{o.table ?? '—'}</strong>
+            </>
+          )}
           <span className="order-card__source muted"> · {src}</span>
         </span>
       </div>
@@ -271,7 +284,7 @@ function HistoryPanel({
                 : `${historyOrderCount} completed ${historyOrderCount === 1 ? 'order' : 'orders'} before today. The calendar shows one day at a time — change the date to view that day, or use “Show all days”.`}
             </p>
           </div>
-          <button type="button" className="history-panel__close btn btn--ghost" data-history-close onClick={onClose}>
+          <button type="button" className="history-panel__close btn btn--danger" data-history-close onClick={onClose}>
             Close
           </button>
         </header>
@@ -350,6 +363,7 @@ export default function OrdersBoard({ billingOnly = false }) {
   const [settlements, setSettlements] = useState([]);
   const [manualOrderOpen, setManualOrderOpen] = useState(false);
   const [settlingTable, setSettlingTable] = useState(null);
+  const [settlingParcelCustomer, setSettlingParcelCustomer] = useState(null);
   const [lastSettlement, setLastSettlement] = useState(null);
   const [pendingBillPopup, setPendingBillPopup] = useState(null);
   const [billConfirmPopup, setBillConfirmPopup] = useState(null);
@@ -363,6 +377,8 @@ export default function OrdersBoard({ billingOnly = false }) {
   const [editItems, setEditItems] = useState([]);
   const [editBusy, setEditBusy] = useState(false);
   const [editError, setEditError] = useState(null);
+  const autoRejectBusyRef = useRef(false);
+  const [orderTypeView, setOrderTypeView] = useState('all'); // all | dinein | parcel
 
   useEffect(() => {
     const unsub = onSnapshot(
@@ -439,6 +455,17 @@ export default function OrdersBoard({ billingOnly = false }) {
   }, []);
 
   const { active, past, rejected } = useMemo(() => partitionOrdersForAdmin(orders), [orders]);
+  const orderTypeMatches = useCallback(
+    (o) => {
+      if (orderTypeView === 'all') return true;
+      if (orderTypeView === 'parcel') return isParcelOrder(o);
+      return !isParcelOrder(o);
+    },
+    [orderTypeView],
+  );
+  const activeFiltered = useMemo(() => active.filter(orderTypeMatches), [active, orderTypeMatches]);
+  const pastFiltered = useMemo(() => past.filter(orderTypeMatches), [past, orderTypeMatches]);
+  const rejectedFiltered = useMemo(() => rejected.filter(orderTypeMatches), [rejected, orderTypeMatches]);
 
   const tableNumbersForManual = useMemo(() => {
     const fromDef = tablesDef.map((t) => Number(t.number)).filter((n) => Number.isFinite(n));
@@ -453,7 +480,12 @@ export default function OrdersBoard({ billingOnly = false }) {
   const billTableNumbers = useMemo(() => {
     const fromDef = tablesDef.map((t) => Number(t.number)).filter((n) => Number.isFinite(n));
     const fromTabs = [
-      ...new Set(orders.filter((o) => orderCountsOnOpenTab(o)).map((o) => Number(o.table)).filter((n) => Number.isFinite(n))),
+      ...new Set(
+        orders
+          .filter((o) => orderCountsOnOpenTab(o))
+          .map((o) => Number(o.table))
+          .filter((n) => Number.isFinite(n) && n > 0),
+      ),
     ];
     const s = new Set([...fromDef, ...fromTabs]);
     return [...s].sort((a, b) => a - b);
@@ -471,6 +503,41 @@ export default function OrdersBoard({ billingOnly = false }) {
     };
   }, [billTableNumbers, orders]);
 
+  const pendingParcelCustomers = useMemo(() => {
+    const groups = new Map();
+    orders
+      .filter((o) => isParcelOrder(o) && isUnbilledOrder(o))
+      .forEach((o) => {
+        const key = displayCustomerName(o);
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(o);
+      });
+    return [...groups.entries()]
+      .map(([customer, list]) => ({
+        pendingCount: list.filter((o) => !isKitchenTerminalStatus(o.status)).length,
+        statusSummary: list
+          .filter((o) => !isKitchenTerminalStatus(o.status))
+          .reduce((acc, o) => {
+            const key = String(o.status || 'pending').toLowerCase();
+            acc[key] = (acc[key] || 0) + 1;
+            return acc;
+          }, {}),
+        customer,
+        orders: list,
+        orderCount: list.length,
+        amount: list.reduce((sum, o) => sum + Number(o.total || 0), 0),
+      }))
+      .sort((a, b) => b.amount - a.amount || a.customer.localeCompare(b.customer));
+  }, [orders]);
+
+  const pendingParcelSummary = useMemo(
+    () => ({
+      customerCount: pendingParcelCustomers.length,
+      totalPendingAmount: pendingParcelCustomers.reduce((sum, row) => sum + row.amount, 0),
+    }),
+    [pendingParcelCustomers],
+  );
+
   const openTableNameByNumber = useMemo(() => {
     const byTable = new Map();
     const openOrders = orders
@@ -479,7 +546,7 @@ export default function OrdersBoard({ billingOnly = false }) {
       .sort((a, b) => timeMs(b.createdAt) - timeMs(a.createdAt));
     for (const o of openOrders) {
       const t = Number(o.table);
-      if (!Number.isFinite(t) || byTable.has(t)) continue;
+      if (!Number.isFinite(t) || t <= 0 || byTable.has(t)) continue;
       const name = displayCustomerName(o);
       if (name !== '—') byTable.set(t, name);
     }
@@ -488,6 +555,43 @@ export default function OrdersBoard({ billingOnly = false }) {
 
   const todayKey = useMemo(() => localDayKey(Date.now()), [orders, dayTick]);
 
+  useEffect(() => {
+    if (autoRejectBusyRef.current) return;
+    const stalePending = orders.filter((o) => {
+      const status = String(o.status || '').toLowerCase();
+      if (status !== 'pending') return false;
+      const created = timeMs(o.createdAt);
+      if (!created) return false;
+      return localDayKey(created) < todayKey;
+    });
+    if (stalePending.length === 0) return;
+
+    autoRejectBusyRef.current = true;
+    const run = async () => {
+      try {
+        let left = [...stalePending];
+        while (left.length > 0) {
+          const chunk = left.slice(0, 500);
+          left = left.slice(500);
+          const batch = writeBatch(db);
+          chunk.forEach((o) => {
+            batch.update(doc(db, 'orders', o.id), {
+              status: 'rejected',
+              rejectedAt: serverTimestamp(),
+              rejectedReason: 'Auto-rejected: pending from previous day',
+            });
+          });
+          await batch.commit();
+        }
+      } catch (e) {
+        setActionError(e?.message || 'Could not auto-reject previous-day pending orders');
+      } finally {
+        autoRejectBusyRef.current = false;
+      }
+    };
+    run();
+  }, [orders, todayKey]);
+
   const yesterdayKey = useMemo(() => {
     const d = new Date();
     d.setDate(d.getDate() - 1);
@@ -495,8 +599,8 @@ export default function OrdersBoard({ billingOnly = false }) {
   }, [dayTick]);
 
   const { pastToday, historyGroups } = useMemo(
-    () => splitPastByToday(past, todayKey),
-    [past, todayKey],
+    () => splitPastByToday(pastFiltered, todayKey),
+    [pastFiltered, todayKey],
   );
 
   const historyOrderCount = useMemo(
@@ -769,6 +873,53 @@ export default function OrdersBoard({ billingOnly = false }) {
     }
   };
 
+  const settleParcelBill = async (customer, list, sum) => {
+    if (!customer || list.length === 0) return;
+    const pending = list.filter((o) => !isKitchenTerminalStatus(o.status));
+    if (pending.length > 0) {
+      const statusLine = Object.entries(
+        pending.reduce((acc, o) => {
+          const key = String(o.status || 'pending').toLowerCase();
+          acc[key] = (acc[key] || 0) + 1;
+          return acc;
+        }, {}),
+      )
+        .map(([k, c]) => `${k}: ${c}`)
+        .join(', ');
+      setActionError(
+        `Cannot clear parcel bill for ${customer} yet. ${pending.length} order(s) still pending delivery (${statusLine}).`,
+      );
+      return;
+    }
+    setSettlingParcelCustomer(customer);
+    setActionError(null);
+    try {
+      let left = [...list];
+      while (left.length > 0) {
+        const chunk = left.slice(0, 500);
+        left = left.slice(500);
+        const batch = writeBatch(db);
+        chunk.forEach((o) => {
+          batch.update(doc(db, 'orders', o.id), { billingStatus: 'billed', billedAt: serverTimestamp() });
+        });
+        await batch.commit();
+      }
+      await addDoc(collection(db, 'settlements'), {
+        settlementType: 'parcel',
+        customerName: customer,
+        amount: sum,
+        orderCount: list.length,
+        orderIds: list.map((o) => o.id),
+        settledAt: serverTimestamp(),
+      });
+      setLastSettlement({ table: `Parcel · ${customer}`, amount: sum, at: Date.now() });
+    } catch (e) {
+      setActionError(e?.message || 'Could not settle parcel bill');
+    } finally {
+      setSettlingParcelCustomer(null);
+    }
+  };
+
   const confirmSettleFromPopup = async () => {
     const p = billConfirmPopup;
     if (!p) return;
@@ -825,6 +976,26 @@ export default function OrdersBoard({ billingOnly = false }) {
                   className={`orders-segment__btn ${orderView === value ? 'orders-segment__btn--on' : ''}`}
                   aria-pressed={orderView === value}
                   onClick={() => setOrderViewPersist(value)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="orders-toolbar__main">
+            <span className="orders-toolbar__caption">Type</span>
+            <div className="orders-segment" role="group" aria-label="Order type view">
+              {[
+                { value: 'all', label: 'All' },
+                { value: 'dinein', label: 'Dine-in' },
+                { value: 'parcel', label: 'Parcel' },
+              ].map(({ value, label }) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={`orders-segment__btn ${orderTypeView === value ? 'orders-segment__btn--on' : ''}`}
+                  aria-pressed={orderTypeView === value}
+                  onClick={() => setOrderTypeView(value)}
                 >
                   {label}
                 </button>
@@ -995,32 +1166,70 @@ export default function OrdersBoard({ billingOnly = false }) {
           </div>
 
           {billsView === 'pending' ? (
-            <section className="bill-strip" aria-label="Open tab totals by table">
-              <h3 className="bill-strip__title">Pending bills by table</h3>
-              <p className="bill-strip__meta muted">
-                Tables with pending bill: <strong>{pendingBillsSummary.tableCountWithDue}</strong> · Pending total:{' '}
-                <strong>₹{pendingBillsSummary.totalPendingAmount.toFixed(2)}</strong>
-              </p>
-              <div className="bill-strip__grid">
-                {billTableNumbers.map((n) => {
-                  const total = openTabTotalForTable(orders, n);
-                  return (
-                    <div key={n} className={`bill-pill ${total > 0 ? 'bill-pill--has' : 'bill-pill--empty'}`}>
-                      <span className="bill-pill__label">Table {n}</span>
-                      <span className="bill-pill__amt">₹{total.toFixed(2)}</span>
-                      <button
-                        type="button"
-                        className="btn btn--done btn--small"
-                        disabled={total <= 0 || settlingTable === n || clearAllBusy}
-                        onClick={() => settleTableBill(n)}
-                      >
-                        {settlingTable === n ? '…' : 'Bill paid'}
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
+            <>
+              <section className="bill-strip" aria-label="Open tab totals by table">
+                <h3 className="bill-strip__title">Pending bills by table</h3>
+                <p className="bill-strip__meta muted">
+                  Tables with pending bill: <strong>{pendingBillsSummary.tableCountWithDue}</strong> · Pending total:{' '}
+                  <strong>₹{pendingBillsSummary.totalPendingAmount.toFixed(2)}</strong>
+                </p>
+                <div className="bill-strip__grid">
+                  {billTableNumbers.map((n) => {
+                    const total = openTabTotalForTable(orders, n);
+                    return (
+                      <div key={n} className={`bill-pill ${total > 0 ? 'bill-pill--has' : 'bill-pill--empty'}`}>
+                        <span className="bill-pill__label">Table {n}</span>
+                        <span className="bill-pill__amt">₹{total.toFixed(2)}</span>
+                        <button
+                          type="button"
+                          className="btn btn--done btn--small"
+                          disabled={total <= 0 || settlingTable === n || clearAllBusy}
+                          onClick={() => settleTableBill(n)}
+                        >
+                          {settlingTable === n ? '…' : 'Bill paid'}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+
+              <section className="bill-strip" aria-label="Pending parcel totals by customer">
+                <h3 className="bill-strip__title">Pending parcel bills by customer</h3>
+                <p className="bill-strip__meta muted">
+                  Customers with parcel due: <strong>{pendingParcelSummary.customerCount}</strong> · Pending total:{' '}
+                  <strong>₹{pendingParcelSummary.totalPendingAmount.toFixed(2)}</strong>
+                </p>
+                <div className="bill-strip__grid">
+                  {pendingParcelCustomers.length === 0 ? (
+                    <p className="muted">No pending parcel bills.</p>
+                  ) : (
+                    pendingParcelCustomers.map((row) => (
+                      <div key={row.customer} className="bill-pill bill-pill--has">
+                        <span className="bill-pill__label">{row.customer}</span>
+                        <span className="bill-pill__amt">₹{row.amount.toFixed(2)}</span>
+                        <span className="muted">{row.orderCount} parcel order(s)</span>
+                        {row.pendingCount > 0 ? (
+                          <span className="muted">
+                            Pending: {Object.entries(row.statusSummary)
+                              .map(([k, c]) => `${k} ${c}`)
+                              .join(', ')}
+                          </span>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="btn btn--done btn--small"
+                          disabled={settlingParcelCustomer === row.customer || row.pendingCount > 0}
+                          onClick={() => settleParcelBill(row.customer, row.orders, row.amount)}
+                        >
+                          {settlingParcelCustomer === row.customer ? '…' : row.pendingCount > 0 ? 'Complete orders first' : 'Bill paid'}
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </section>
+            </>
           ) : (
             <section className="settlements-strip" aria-label="Settled bill history">
               <h3 className="settlements-strip__title">Settled bills history</h3>
@@ -1100,7 +1309,16 @@ export default function OrdersBoard({ billingOnly = false }) {
                   <ul className="settlements-strip__list">
                     {selectedSettledRows.map((s) => (
                       <li key={s.id}>
-                        Table <strong>{s.table}</strong> · ₹{Number(s.amount || 0).toFixed(2)} ·{' '}
+                      {s.settlementType === 'parcel' ? (
+                        <>
+                          Parcel <strong>{displayCustomerName(s)}</strong>
+                        </>
+                      ) : (
+                        <>
+                          Table <strong>{s.table}</strong>
+                        </>
+                      )}{' '}
+                      · ₹{Number(s.amount || 0).toFixed(2)} ·{' '}
                         {s.orderCount ?? (s.orderIds?.length || 0)} order(s) · {formatTime(s.settledAt)}
                       </li>
                     ))}
@@ -1110,7 +1328,16 @@ export default function OrdersBoard({ billingOnly = false }) {
                 <ul className="settlements-strip__list">
                   {filteredSettlements.map((s) => (
                     <li key={s.id}>
-                      Table <strong>{s.table}</strong> · ₹{Number(s.amount || 0).toFixed(2)} ·{' '}
+                      {s.settlementType === 'parcel' ? (
+                        <>
+                          Parcel <strong>{displayCustomerName(s)}</strong>
+                        </>
+                      ) : (
+                        <>
+                          Table <strong>{s.table}</strong>
+                        </>
+                      )}{' '}
+                      · ₹{Number(s.amount || 0).toFixed(2)} ·{' '}
                       {s.orderCount ?? (s.orderIds?.length || 0)} order(s) · {formatTime(s.settledAt)}
                     </li>
                   ))}
@@ -1155,14 +1382,14 @@ export default function OrdersBoard({ billingOnly = false }) {
             <section className="board-surface board-surface--rejected" aria-labelledby="orders-rejected-heading">
               <h2 id="orders-rejected-heading" className="board-section__title board-section__title--lg">
                 Rejected orders
-                <span className="board-section__count">{rejected.length}</span>
+                <span className="board-section__count">{rejectedFiltered.length}</span>
               </h2>
               <p className="board-section__sub muted">Voided or refused tickets — totals do not count on open tabs.</p>
-              {rejected.length === 0 ? (
+              {rejectedFiltered.length === 0 ? (
                 <p className="muted board-section__empty">No rejected orders.</p>
               ) : (
                 <ul className="order-grid">
-                  {rejected.map((o) => (
+                  {rejectedFiltered.map((o) => (
                     <OrderCard
                       key={o.id}
                       o={o}
@@ -1181,14 +1408,14 @@ export default function OrdersBoard({ billingOnly = false }) {
                 <section className="board-surface board-surface--active" aria-labelledby="orders-active-heading">
                   <h2 id="orders-active-heading" className="board-section__title board-section__title--lg">
                     Active orders
-                    <span className="board-section__count">{active.length}</span>
+                    <span className="board-section__count">{activeFiltered.length}</span>
                   </h2>
                   <p className="board-section__sub muted">First guest at the top — same order they joined the queue.</p>
-                  {active.length === 0 ? (
+                  {activeFiltered.length === 0 ? (
                     <p className="muted board-section__empty">No active orders right now.</p>
                   ) : (
                     <ul className="order-grid">
-                      {active.map((o) => (
+                      {activeFiltered.map((o) => (
                         <OrderCard
                           key={o.id}
                           o={o}

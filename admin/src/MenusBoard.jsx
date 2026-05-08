@@ -432,7 +432,7 @@ export default function MenusBoard() {
               <h3 id="menus-edit-title" className="menus-add__title">
                 Edit product
               </h3>
-              <button type="button" className="btn btn--ghost btn--small" onClick={cancelEdit} disabled={busyId === editingRow.id}>
+              <button type="button" className="btn btn--danger btn--small" onClick={cancelEdit} disabled={busyId === editingRow.id}>
                 Close
               </button>
             </div>
@@ -572,7 +572,7 @@ export default function MenusBoard() {
                 </h3>
                 <button
                   type="button"
-                  className="btn btn--ghost btn--small"
+                  className="btn btn--danger btn--small"
                   onClick={() => {
                     setAddErrors({});
                     setNewCategoryMode(existingCategories.length > 0 ? 'existing' : 'new');

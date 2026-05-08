@@ -19,6 +19,10 @@ export function isRejectedStatus(status) {
   return String(status || '').toLowerCase() === 'rejected';
 }
 
+export function isParcelOrder(o) {
+  return String(o?.orderType || '').toLowerCase() === 'parcel';
+}
+
 /** Bill not yet collected at counter. */
 export function isUnbilledOrder(o) {
   return o?.billingStatus !== 'billed';
@@ -27,6 +31,7 @@ export function isUnbilledOrder(o) {
 /** Lines that still count on the guest’s open tab (before “Bill paid”). */
 export function orderCountsOnOpenTab(o) {
   if (!o || isRejectedStatus(o.status)) return false;
+  if (isParcelOrder(o)) return false;
   return isUnbilledOrder(o);
 }
 

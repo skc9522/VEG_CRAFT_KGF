@@ -167,6 +167,7 @@ export default function TablesBoard() {
   const [actionError, setActionError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [qrById, setQrById] = useState({});
+  const [parcelQr, setParcelQr] = useState('');
   const [qrGenMessage, setQrGenMessage] = useState(null);
   const [newNum, setNewNum] = useState('');
   const [newLabel, setNewLabel] = useState('');
@@ -220,8 +221,9 @@ export default function TablesBoard() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!baseUrl || tables.length === 0) {
+      if (!baseUrl) {
         setQrById({});
+        setParcelQr('');
         setQrGenMessage(null);
         return;
       }
@@ -241,6 +243,12 @@ export default function TablesBoard() {
       }
       if (!cancelled) {
         setQrById(next);
+        try {
+          setParcelQr(await qrToDisplayableDataUrl(`${baseUrl}/?mode=parcel`));
+        } catch {
+          hadError = true;
+          setParcelQr('');
+        }
         if (hadError) {
           setQrGenMessage('Some QR codes could not be generated. Try setting VITE_CUSTOMER_APP_URL and refresh.');
         }
@@ -455,8 +463,68 @@ export default function TablesBoard() {
     [qrById, baseUrl],
   );
 
+  const downloadParcelQr = useCallback(async () => {
+    if (!parcelQr) {
+      setActionError('Parcel QR is still generating. Please try again in a moment.');
+      return;
+    }
+    const cardSrc = await buildQrCardDataUrl(parcelQr, 'Parcel Pickup');
+    downloadDataUrl(cardSrc, 'veg-cafe-parcel-qr.png');
+    setActionError(null);
+  }, [parcelQr]);
+
+  const printParcelQr = useCallback(() => {
+    if (!parcelQr) {
+      setActionError('Parcel QR is still generating. Please try again in a moment.');
+      return;
+    }
+    const encoded = baseUrl ? `${baseUrl}/?mode=parcel` : '';
+    const printWindow = openPrintWindow(`<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Print QR - Parcel Pickup</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; padding: 24px; color: #111827; }
+      .card { max-width: 420px; margin: 0 auto; border: 1px solid #d1d5db; border-radius: 12px; padding: 18px; text-align: center; }
+      h1 { margin: 0 0 8px; font-size: 24px; }
+      p { margin: 4px 0; }
+      img { width: 280px; height: 280px; margin: 12px auto; display: block; }
+      .muted { color: #6b7280; font-size: 12px; word-break: break-all; }
+      @media print { body { padding: 0; } .card { border: none; } }
+    </style>
+  </head>
+  <body>
+    <section class="card">
+      <h1>Parcel Pickup</h1>
+      <p><strong>Hey buddy 👋 Scan the QR to place your order 🍽️</strong></p>
+      <p>#PARCEL</p>
+      <img src="${parcelQr}" alt="QR code for parcel pickup" />
+      ${encoded ? `<p class="muted">${escapeHtml(encoded)}</p>` : ''}
+    </section>
+    <script>
+      const imgs = Array.from(document.images);
+      Promise.all(imgs.map((img) => {
+        if (img.complete) return Promise.resolve();
+        return new Promise((resolve) => {
+          img.addEventListener('load', resolve, { once: true });
+          img.addEventListener('error', resolve, { once: true });
+        });
+      })).then(() => {
+        window.print();
+      });
+    </script>
+  </body>
+</html>`);
+    if (!printWindow) {
+      setActionError('Popup blocked by browser. Allow popups to print QR.');
+      return;
+    }
+    setActionError(null);
+  }, [parcelQr, baseUrl]);
+
   const downloadAllQrs = useCallback(async () => {
-    if (tables.length === 0) return;
+    if (tables.length === 0 && !parcelQr) return;
     const downloads = tables
       .map((t) => {
         const src = qrById[t.id];
@@ -467,6 +535,9 @@ export default function TablesBoard() {
         return { src, label, fileName: `veg-cafe-${tablePart}-qr.png` };
       })
       .filter(Boolean);
+    if (parcelQr) {
+      downloads.push({ src: parcelQr, label: 'Parcel Pickup', fileName: 'veg-cafe-parcel-qr.png' });
+    }
     if (downloads.length === 0) {
       setActionError('QRs are still generating. Please try again in a moment.');
       return;
@@ -477,10 +548,10 @@ export default function TablesBoard() {
       await sleep(180);
     }
     setActionError(null);
-  }, [tables, qrById]);
+  }, [tables, qrById, parcelQr]);
 
   const printAllQrs = useCallback(() => {
-    if (tables.length === 0) return;
+    if (tables.length === 0 && !parcelQr) return;
     const cards = tables
       .map((t) => {
         const src = qrById[t.id];
@@ -501,7 +572,19 @@ export default function TablesBoard() {
       })
       .filter(Boolean)
       .join('');
-    if (!cards) {
+    const parcelCard = parcelQr
+      ? `
+          <article class="card">
+            <h2>Parcel Pickup</h2>
+            <p><strong>Hey buddy 👋 Scan the QR to place your order 🍽️</strong></p>
+            <p>#PARCEL</p>
+            <img src="${parcelQr}" alt="QR code for parcel pickup" />
+            ${baseUrl ? `<p class="muted">${escapeHtml(`${baseUrl}/?mode=parcel`)}</p>` : ''}
+          </article>
+        `
+      : '';
+    const allCards = `${cards}${parcelCard}`;
+    if (!allCards) {
       setActionError('QRs are still generating. Please try again in a moment.');
       return;
     }
@@ -525,7 +608,7 @@ export default function TablesBoard() {
     </style>
   </head>
   <body>
-    <section class="grid">${cards}</section>
+    <section class="grid">${allCards}</section>
     <script>
       const imgs = Array.from(document.images);
       Promise.all(imgs.map((img) => {
@@ -545,7 +628,7 @@ export default function TablesBoard() {
       return;
     }
     setActionError(null);
-  }, [tables, qrById, baseUrl]);
+  }, [tables, qrById, baseUrl, parcelQr]);
 
   const rulesDeployHint = (
     <span className="tables-board__err-follow">
@@ -640,7 +723,7 @@ export default function TablesBoard() {
           <div className="tables-modal-panel">
             <header className="tables-modal-panel__head">
               <h2 id="add-table-modal-title">Add a table</h2>
-              <button type="button" className="btn btn--ghost btn--small" onClick={closeAddTableModal}>
+              <button type="button" className="btn btn--danger btn--small" onClick={closeAddTableModal}>
                 Close
               </button>
             </header>
@@ -701,7 +784,7 @@ export default function TablesBoard() {
           <div className="tables-modal-panel tables-modal-panel--confirm">
             <header className="tables-modal-panel__head">
               <h2 id="delete-table-modal-title">Remove table?</h2>
-              <button type="button" className="btn btn--ghost btn--small" onClick={cancelRemoveTable}>
+              <button type="button" className="btn btn--danger btn--small" onClick={cancelRemoveTable}>
                 Close
               </button>
             </header>
@@ -734,10 +817,44 @@ export default function TablesBoard() {
         </div>
       ) : null}
 
-      {tables.length === 0 && !loadError ? (
-        <p className="muted board__empty">No tables yet — create the default six or add your own.</p>
-      ) : (
+      {!loadError ? (
+        <>
+          {tables.length === 0 ? <p className="muted board__empty">No tables yet — create the default six or add your own.</p> : null}
         <ul className="tables-grid">
+          <li className="tables-card">
+            <div className="tables-card__head">
+              <strong className="tables-card__title">Parcel Pickup</strong>
+              <span className="tables-card__num">#PARCEL</span>
+            </div>
+            <div className="tables-card__qr">
+              {parcelQr ? (
+                <img src={parcelQr} alt="QR for parcel pickup" width={200} height={200} />
+              ) : (
+                <div className="tables-card__qr-placeholder">{baseUrl ? 'Generating…' : 'Set base URL below — cannot build link.'}</div>
+              )}
+            </div>
+            {baseUrl ? (
+              <>
+                <p className="tables-card__link">
+                  <a href={`${baseUrl}/?mode=parcel`} target="_blank" rel="noreferrer">
+                    Open parcel guest link
+                  </a>
+                </p>
+                <p className="tables-card__encoded" title="Exact string inside the QR">
+                  <span className="tables-card__encoded-label">In QR:</span>{' '}
+                  <code className="tables-card__encoded-url">{`${baseUrl}/?mode=parcel`}</code>
+                </p>
+              </>
+            ) : null}
+            <div className="tables-card__row-actions">
+              <button type="button" className="btn btn--ghost btn--small" disabled={busy || !parcelQr} onClick={downloadParcelQr}>
+                Download QR
+              </button>
+              <button type="button" className="btn btn--ghost btn--small" disabled={busy || !parcelQr} onClick={printParcelQr}>
+                Print QR
+              </button>
+            </div>
+          </li>
           {tables.map((t) => {
             const n = Number(t.number);
             const link = Number.isFinite(n) && baseUrl ? `${baseUrl}/?table=${n}` : '';
@@ -784,7 +901,8 @@ export default function TablesBoard() {
             );
           })}
         </ul>
-      )}
+        </>
+      ) : null}
     </div>
   );
 }

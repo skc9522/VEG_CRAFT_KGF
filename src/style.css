@@ -1378,6 +1378,18 @@ body {
   color: #166534;
   font-size: 0.85rem;
   font-weight: 700;
+  font: inherit;
+  cursor: pointer;
+}
+
+.table-lock-modal__vacant-pill:hover {
+  background: #bbf7d0;
+  border-color: #4ade80;
+}
+
+.table-lock-modal__vacant-pill:focus-visible {
+  outline: 2px solid #22c55e;
+  outline-offset: 1px;
 }
 
 .table-lock-modal__toast {

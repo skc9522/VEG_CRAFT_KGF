@@ -134,6 +134,20 @@ function readTableFromUrl() {
   return null;
 }
 
+/** Read order mode from URL: ?mode=parcel or /parcel */
+function readOrderModeFromUrl() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const mode = String(params.get('mode') || '').trim().toLowerCase();
+    if (mode === 'parcel') return 'parcel';
+    const path = window.location.pathname.replace(/\/$/, '').toLowerCase();
+    if (path.endsWith('/parcel')) return 'parcel';
+  } catch {
+    /* ignore */
+  }
+  return 'dinein';
+}
+
 /** Strip `?table=` or `/table/N` so the next guest must scan again (same tab after bill paid). */
 function replaceHistoryClearingTableFromUrl() {
   try {
@@ -151,8 +165,20 @@ function replaceHistoryClearingTableFromUrl() {
   }
 }
 
+function replaceHistorySettingTableInUrl(tableNumber) {
+  try {
+    const u = new URL(window.location.href);
+    u.searchParams.set('table', String(tableNumber));
+    const qs = u.searchParams.toString();
+    window.history.replaceState({}, '', `${u.pathname}${qs ? `?${qs}` : ''}${u.hash}`);
+  } catch {
+    /* ignore */
+  }
+}
+
 export default function App() {
   const [tableFromUrl, setTableFromUrl] = useState(null);
+  const [orderMode, setOrderMode] = useState('dinein');
   const [tableFromCustomer, setTableFromCustomer] = useState(() =>
     allowManualTableEntry ? readStoredCustomerTable() : null,
   );
@@ -212,19 +238,21 @@ export default function App() {
 
   useEffect(() => {
     setTableFromUrl(readTableFromUrl());
+    setOrderMode(readOrderModeFromUrl());
   }, []);
 
-  const effectiveTable = resolveEffectiveTable(tableFromUrl, tableFromCustomer, allowManualTableEntry);
+  const isParcelMode = orderMode === 'parcel';
+  const effectiveTable = isParcelMode ? null : resolveEffectiveTable(tableFromUrl, tableFromCustomer, allowManualTableEntry);
 
   /** Typed table fallback (staff/testing only when env is set). */
-  const needsTablePrompt = !useDummyMenu && allowManualTableEntry && effectiveTable == null;
+  const needsTablePrompt = !isParcelMode && !useDummyMenu && allowManualTableEntry && effectiveTable == null;
 
   /** Production: no table in URL and no dev default — must scan the table QR from admin printout. */
-  const needsScanQrScreen = !useDummyMenu && !allowManualTableEntry && effectiveTable == null;
+  const needsScanQrScreen = !isParcelMode && !useDummyMenu && !allowManualTableEntry && effectiveTable == null;
 
   const noTableForOrdering = needsTablePrompt || needsScanQrScreen;
 
-  const showBlockedPopup = !useDummyMenu && effectiveTable != null && tableLockStatus === 'blocked';
+  const showBlockedPopup = !isParcelMode && !useDummyMenu && effectiveTable != null && tableLockStatus === 'blocked';
 
   const vacantTables = useMemo(() => {
     if (useDummyMenu) return [];
@@ -305,18 +333,20 @@ export default function App() {
   const tableLockIssue = useMemo(
     () =>
       effectiveTable != null &&
+      !isParcelMode &&
       !useDummyMenu &&
       (tableLockStatus === 'loading' || tableLockStatus === 'blocked' || tableLockStatus === 'error'),
-    [effectiveTable, tableLockStatus],
+    [effectiveTable, tableLockStatus, isParcelMode],
   );
 
   const canShowTableBill = useMemo(
     () =>
+      !isParcelMode &&
       !noTableForOrdering &&
       effectiveTable != null &&
       !tableLockIssue &&
       (useDummyMenu || tableLockStatus === 'ok'),
-    [noTableForOrdering, effectiveTable, tableLockIssue, useDummyMenu, tableLockStatus],
+    [isParcelMode, noTableForOrdering, effectiveTable, tableLockIssue, useDummyMenu, tableLockStatus],
   );
 
   const [firestoreOpenTabTotal, setFirestoreOpenTabTotal] = useState(null);
@@ -366,6 +396,28 @@ export default function App() {
     setTableFromCustomer(null);
   }, []);
 
+  const switchToVacantTable = useCallback(
+    (nextTable) => {
+      const n = Number(nextTable);
+      if (!Number.isFinite(n) || n < 1) return;
+      if (effectiveTable != null) {
+        try {
+          sessionStorage.removeItem(tableSessionStorageKey(effectiveTable));
+        } catch {
+          /* ignore */
+        }
+      }
+      replaceHistorySettingTableInUrl(n);
+      setTableFromUrl(n);
+      persistCustomerTable(n);
+      setTableFromCustomer(n);
+      setNewlyVacantTable(null);
+      setTableLockError(null);
+      setTableLockStatus('loading');
+    },
+    [effectiveTable],
+  );
+
   const dismissVisitEndedMessage = useCallback(() => setVisitEndedMessage(null), []);
   const dismissSuccess = useCallback(() => setOrderSuccess(false), []);
 
@@ -402,6 +454,15 @@ export default function App() {
 
   /** One active guest session per table (Firestore `tableLocks`) until staff settles the bill. */
   useEffect(() => {
+    if (isParcelMode) {
+      setTableLockStatus('skipped');
+      setTableLockError(null);
+      tableLockClaimingRef.current = false;
+      lockSubscribedTableRef.current = null;
+      ignoreLockClaimsRef.current = false;
+      heldTableLockOkRef.current = false;
+      return undefined;
+    }
     if (useDummyMenu) {
       setTableLockStatus('ok');
       setTableLockError(null);
@@ -493,7 +554,7 @@ export default function App() {
       cancelled = true;
       unsub();
     };
-  }, [effectiveTable, endGuestSessionAfterBillSettled]);
+  }, [effectiveTable, endGuestSessionAfterBillSettled, isParcelMode]);
 
   /** Live `orders/{id}.status` from Firestore, or demo timer for DEMO-* ids. */
   useEffect(() => {
@@ -655,6 +716,7 @@ export default function App() {
 
   const sendServiceRequest = useCallback(async () => {
     if (useDummyMenu) return;
+    if (isParcelMode) return;
     if (effectiveTable == null || noTableForOrdering || tableLockIssue) return;
     try {
       const last = Number(sessionStorage.getItem(LAST_BUZZ_KEY) || 0);
@@ -681,7 +743,7 @@ export default function App() {
     } catch (e) {
       setOrderError(e?.message || 'Could not call staff');
     }
-  }, [effectiveTable, guestCallName, noTableForOrdering, tableLockIssue]);
+  }, [effectiveTable, guestCallName, noTableForOrdering, tableLockIssue, isParcelMode]);
 
   const clearTableSessionForCurrentTable = useCallback(() => {
     if (effectiveTable == null) return;
@@ -762,7 +824,7 @@ export default function App() {
   const cartTotal = cart.reduce((sum, line) => sum + line.price * line.qty, 0);
 
   const placeOrder = async () => {
-    if (tableLockIssue || effectiveTable == null || cart.length === 0) return;
+    if (tableLockIssue || (!isParcelMode && effectiveTable == null) || cart.length === 0) return;
     setOrderError(null);
     setPlacingOrder(true);
 
@@ -781,12 +843,13 @@ export default function App() {
         orderId = `DEMO-${Date.now().toString(36).toUpperCase()}`;
       } else {
         const docRef = await addDoc(collection(db, 'orders'), {
-          table: effectiveTable,
+          table: isParcelMode ? null : effectiveTable,
+          orderType: isParcelMode ? 'parcel' : 'dinein',
           customerName: guestCallName,
           items: itemsPayload,
           total: totalSnapshot,
           status: 'pending',
-          billingStatus: 'unbilled',
+          billingStatus: isParcelMode ? 'na' : 'unbilled',
           source: 'customer',
           createdAt: serverTimestamp(),
         });
@@ -795,7 +858,8 @@ export default function App() {
 
       const receipt = {
         orderId,
-        table: effectiveTable,
+        table: isParcelMode ? null : effectiveTable,
+        orderType: isParcelMode ? 'parcel' : 'dinein',
         customerName: guestCallName,
         items: itemsPayload.map((i) => ({ ...i })),
         total: totalSnapshot,
@@ -843,7 +907,11 @@ export default function App() {
         <h1>Welcome to VEG CRAFT</h1>
         <p className="header-sub">Order fresh veg favourites — we’re glad you’re here.</p>
         <p className="table-badge">
-          {effectiveTable != null ? (
+          {isParcelMode ? (
+            <>
+              Parcel order <strong>pickup</strong>
+            </>
+          ) : effectiveTable != null ? (
             <>
               Table <strong>{effectiveTable}</strong>
               {tableFromUrl == null && tableFromCustomer != null ? (
@@ -876,7 +944,7 @@ export default function App() {
           )}
         </p>
         {/* Call staff button moved to floating action for mobile */}
-        {effectiveTable != null && !useDummyMenu && tableLockStatus === 'loading' ? (
+        {!isParcelMode && effectiveTable != null && !useDummyMenu && tableLockStatus === 'loading' ? (
           <p className="table-lock-hint" role="status">
             Checking table availability…
           </p>
@@ -940,13 +1008,19 @@ export default function App() {
             {vacantTables.length > 0 ? (
               <>
                 <p className="table-lock-modal__sub">
-                  Vacant tables right now (ask staff for that table QR):
+                  Vacant tables right now (tap one to switch):
                 </p>
                 <div className="table-lock-modal__vacant-grid" role="list">
                   {vacantTables.map((n) => (
-                    <span key={n} className="table-lock-modal__vacant-pill" role="listitem">
+                    <button
+                      key={n}
+                      type="button"
+                      className="table-lock-modal__vacant-pill"
+                      role="listitem"
+                      onClick={() => switchToVacantTable(n)}
+                    >
                       Table {n}
-                    </span>
+                    </button>
                   ))}
                 </div>
               </>
@@ -1051,13 +1125,13 @@ export default function App() {
           total={cartTotal}
           onPlaceOrder={placeOrder}
           placeOrderDisabled={
-            tableLockIssue || effectiveTable == null || cart.length === 0 || placingOrder
+            tableLockIssue || (!isParcelMode && effectiveTable == null) || cart.length === 0 || placingOrder
           }
           placingOrder={placingOrder}
         />
       ) : null}
 
-      {!noTableForOrdering && !tableLockIssue ? (
+      {!noTableForOrdering && !tableLockIssue && !isParcelMode ? (
         <button type="button" className="call-staff-fab" onClick={sendServiceRequest} aria-label="Call staff">
           <span className="call-staff-fab__icon" aria-hidden="true">
             🔔

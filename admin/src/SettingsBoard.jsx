@@ -374,7 +374,7 @@ export default function SettingsBoard() {
               ) : null}
             </div>
             <div className="orders-modal-panel__footer orders-modal-panel__footer--confirm">
-              <button type="button" className="btn btn--ghost" onClick={closeUnlockFlow} disabled={freeTableBusy}>
+              <button type="button" className="btn btn--danger" onClick={closeUnlockFlow} disabled={freeTableBusy}>
                 Close
               </button>
 

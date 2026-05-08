@@ -29,6 +29,7 @@ function normalizeLineForSubmit(line) {
 }
 
 export default function ManualOrderModal({ open, onClose, tableNumbers, menuItems, openTableNameByNumber, onPlaced }) {
+  const [orderType, setOrderType] = useState('dinein'); // dinein | parcel
   const [table, setTable] = useState('');
   const [customerName, setCustomerName] = useState('Walk-in');
   const [busy, setBusy] = useState(false);
@@ -46,6 +47,7 @@ export default function ManualOrderModal({ open, onClose, tableNumbers, menuItem
     if (!open) return;
     setLines([]);
     setError(null);
+    setOrderType('dinein');
   }, [open]);
 
   const existingTableCustomerName = useMemo(() => {
@@ -59,6 +61,10 @@ export default function ManualOrderModal({ open, onClose, tableNumbers, menuItem
 
   useEffect(() => {
     if (!open) return;
+    if (orderType === 'parcel') {
+      setCustomerName((prev) => (String(prev || '').trim() === '' || prev === 'Walk-in' ? 'Parcel guest' : prev));
+      return;
+    }
     if (!table) {
       setCustomerName('Walk-in');
       return;
@@ -68,7 +74,7 @@ export default function ManualOrderModal({ open, onClose, tableNumbers, menuItem
       return;
     }
     setCustomerName('Walk-in');
-  }, [open, table, existingTableCustomerName]);
+  }, [open, table, existingTableCustomerName, orderType]);
 
   const addFromMenu = (item) => {
     const price = Number(item.price) || 0;
@@ -124,8 +130,9 @@ export default function ManualOrderModal({ open, onClose, tableNumbers, menuItem
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError(null);
+    const isParcel = orderType === 'parcel';
     const tNum = Number(table);
-    if (!Number.isFinite(tNum) || tNum < 1) {
+    if (!isParcel && (!Number.isFinite(tNum) || tNum < 1)) {
       setError('Choose a table number.');
       return;
     }
@@ -138,20 +145,23 @@ export default function ManualOrderModal({ open, onClose, tableNumbers, menuItem
     }
     setBusy(true);
     try {
-      // Ensure table QR is blocked for new phones once staff starts a tab.
-      // If the table is already locked by a guest session, this will simply be "not claimed" and scanning remains blocked anyway.
-      try {
-        await tryClaimTableLock(db, tNum, 'admin');
-      } catch {
-        // Non-fatal: order can still be placed even if lock can't be claimed.
+      if (!isParcel) {
+        // Ensure table QR is blocked for new phones once staff starts a tab.
+        // If the table is already locked by a guest session, this will simply be "not claimed" and scanning remains blocked anyway.
+        try {
+          await tryClaimTableLock(db, tNum, 'admin');
+        } catch {
+          // Non-fatal: order can still be placed even if lock can't be claimed.
+        }
       }
       await addDoc(collection(db, 'orders'), {
-        table: tNum,
-        customerName: String(customerName || '').trim() || 'Walk-in',
+        table: isParcel ? null : tNum,
+        orderType: isParcel ? 'parcel' : 'dinein',
+        customerName: String(customerName || '').trim() || (isParcel ? 'Parcel guest' : 'Walk-in'),
         items,
         total: items.reduce((s, i) => s + i.price * i.qty, 0),
         status: 'pending',
-        billingStatus: 'unbilled',
+        billingStatus: isParcel ? 'na' : 'unbilled',
         source: 'admin',
         createdAt: serverTimestamp(),
       });
@@ -160,6 +170,7 @@ export default function ManualOrderModal({ open, onClose, tableNumbers, menuItem
       setLines([]);
       setTable('');
       setCustomerName('Walk-in');
+      setOrderType('dinein');
     } catch (err) {
       setError(err?.message || 'Could not save order');
     } finally {
@@ -175,7 +186,7 @@ export default function ManualOrderModal({ open, onClose, tableNumbers, menuItem
       <div className="manual-order-panel manual-order-panel--wide" role="dialog" aria-modal="true" aria-labelledby="manual-order-title">
         <header className="manual-order-panel__head">
           <h2 id="manual-order-title">Manual order</h2>
-          <button type="button" className="btn btn--ghost btn--small" onClick={onClose}>
+          <button type="button" className="btn btn--danger btn--small" onClick={onClose}>
             Close
           </button>
         </header>
@@ -187,8 +198,15 @@ export default function ManualOrderModal({ open, onClose, tableNumbers, menuItem
           ) : null}
           <div className="manual-order-row">
             <label>
+              Order type
+              <select value={orderType} onChange={(e) => setOrderType(e.target.value)} disabled={busy}>
+                <option value="dinein">Dine-in</option>
+                <option value="parcel">Parcel</option>
+              </select>
+            </label>
+            <label>
               Table
-              <select value={table} onChange={(e) => setTable(e.target.value)} required disabled={busy}>
+              <select value={table} onChange={(e) => setTable(e.target.value)} required={orderType !== 'parcel'} disabled={busy || orderType === 'parcel'}>
                 <option value="">Select…</option>
                 {sortedTables.map((n) => (
                   <option key={n} value={n}>
@@ -205,7 +223,9 @@ export default function ManualOrderModal({ open, onClose, tableNumbers, menuItem
                 onChange={(e) => setCustomerName(e.target.value)}
                 disabled={busy}
               />
-              {existingTableCustomerName ? (
+              {orderType === 'parcel' ? (
+                <span className="manual-order-field-hint">Parcel orders are billed separately by customer name.</span>
+              ) : existingTableCustomerName ? (
                 <span className="manual-order-field-hint">
                   Auto-filled from current table guest: <strong>{existingTableCustomerName}</strong>
                 </span>
